@@ -21,11 +21,17 @@ import {
   Eye,
   Sliders,
   Maximize2,
+  FolderArchive,
+  ArrowUpRight,
 } from 'lucide-react';
 import { useContentOS } from '../../context/ContentOSContext';
 import { ContentObject, SceneItem } from '../../types/content';
 
-export const DesktopWorkspace: React.FC = () => {
+interface DesktopWorkspaceProps {
+  onOpenAssetLibrary?: () => void;
+}
+
+export const DesktopWorkspace: React.FC<DesktopWorkspaceProps> = ({ onOpenAssetLibrary }) => {
   const {
     activeContent,
     updateContentObject,
@@ -211,7 +217,17 @@ export const DesktopWorkspace: React.FC = () => {
                 <Layers className="w-3.5 h-3.5 text-sky-400" />
                 Zugeordnete Assets ({item.assets.length})
               </span>
-              <span className="text-[10px] text-neutral-500 font-mono">Mobile Sync</span>
+              {onOpenAssetLibrary ? (
+                <button
+                  onClick={onOpenAssetLibrary}
+                  className="text-[10px] text-amber-400 hover:underline flex items-center gap-1 font-semibold"
+                >
+                  <span>Asset Library</span>
+                  <ArrowUpRight className="w-3 h-3" />
+                </button>
+              ) : (
+                <span className="text-[10px] text-neutral-500 font-mono">Mobile Sync</span>
+              )}
             </div>
             <div className="space-y-1.5">
               {item.assets.map((asset) => (
