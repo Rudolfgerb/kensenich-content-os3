@@ -1,0 +1,6 @@
+{
+  "name": "Mutuus Content OS",
+  "description": "Cross-Platform Content Creation & Production OS connecting mobile capture with desktop workspace.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
