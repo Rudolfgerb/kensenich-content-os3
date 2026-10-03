@@ -10,6 +10,20 @@ import {
   ContentStatus,
 } from '../types/content';
 import { initialProjects, initialBrandKit, initialContentObjects } from '../data/initialData';
+import {
+  auth,
+  db,
+  googleProvider,
+  handleFirestoreError,
+  OperationType,
+} from '../lib/firebase';
+import { onAuthStateChanged, signInWithPopup, signOut, User } from 'firebase/auth';
+import {
+  collection,
+  doc,
+  setDoc,
+  onSnapshot,
+} from 'firebase/firestore';
 
 interface ContentOSContextType {
   // State
@@ -25,6 +39,12 @@ interface ContentOSContextType {
   lastSyncedAt: string;
   conflictData: ConflictRecord | null;
   isAiLoading: boolean;
+
+  // Firebase Auth State & Actions
+  user: User | null;
+  isAuthLoading: boolean;
+  loginWithGoogle: () => Promise<void>;
+  logout: () => Promise<void>;
 
   // Actions
   setViewMode: (mode: 'desktop' | 'mobile' | 'dual') => void;
@@ -49,11 +69,20 @@ interface ContentOSContextType {
   updateTimelineClips: (contentId: string, trackType: keyof ContentObject['videoProject']['timeline'], clips: TimelineTrackClip[]) => void;
   triggerSimulatedConflict: () => void;
   resolveConflict: (choice: 'phone' | 'desktop') => void;
+  exportPackage: (contentId: string) => void;
+  updateBrandKit: (updates: Partial<BrandKit>) => void;
+
+  // AI Actions (Gemini, Veo, Lyria, Search Grounding, Transcribe, Chat)
   generateReelWithAi: (contentId: string) => Promise<void>;
   generateBriefFromVoiceAi: (transcript: string) => Promise<any>;
   quickAssistAi: (contentId: string, action: 'hook' | 'improve' | 'caption') => Promise<string | string[]>;
-  exportPackage: (contentId: string) => void;
-  updateBrandKit: (updates: Partial<BrandKit>) => void;
+  generateImageWithAi: (prompt: string, inputImageBase64?: string, aspectRatio?: '1:1' | '16:9' | '9:16' | '4:3') => Promise<string>;
+  generateVideoWithVeo: (prompt: string, imageBytes?: string, aspectRatio?: '16:9' | '9:16') => Promise<string>;
+  generateMusicWithLyria: (prompt: string, duration?: string, model?: 'lyria-3-clip-preview' | 'lyria-3-pro-preview') => Promise<string>;
+  searchGroundingWithAi: (query: string) => Promise<{ text: string; sources: any[] }>;
+  mapsGroundingWithAi: (query: string) => Promise<{ text: string; places: any[] }>;
+  transcribeAudioWithAi: (audioBase64: string, mimeType?: string) => Promise<string>;
+  sendChatMessage: (messages: { role: string; text: string }[], model?: string, role?: string) => Promise<string>;
 }
 
 const ContentOSContext = createContext<ContentOSContextType | null>(null);
@@ -88,6 +117,84 @@ export const ContentOSProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [conflictData, setConflictData] = useState<ConflictRecord | null>(null);
   const [isAiLoading, setIsAiLoading] = useState<boolean>(false);
 
+  // Firebase Auth State
+  const [user, setUser] = useState<User | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState<boolean>(true);
+
+  // Listen to Auth State
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      setUser(currentUser);
+      setIsAuthLoading(false);
+
+      if (currentUser) {
+        // Save/Sync User profile to Firestore
+        try {
+          const userRef = doc(db, 'users', currentUser.uid);
+          await setDoc(
+            userRef,
+            {
+              userId: currentUser.uid,
+              email: currentUser.email || '',
+              displayName: currentUser.displayName || 'Creator',
+              photoURL: currentUser.photoURL || '',
+              createdAt: new Date().toISOString(),
+            },
+            { merge: true }
+          );
+        } catch (err) {
+          handleFirestoreError(err, OperationType.WRITE, `users/${currentUser.uid}`);
+        }
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Listen to Firestore content when user is logged in
+  useEffect(() => {
+    if (!user) return;
+
+    const path = `users/${user.uid}/content`;
+    const colRef = collection(db, 'users', user.uid, 'content');
+
+    const unsubscribe = onSnapshot(
+      colRef,
+      (snapshot) => {
+        if (!snapshot.empty) {
+          const items: ContentObject[] = [];
+          snapshot.forEach((docSnap) => {
+            items.push(docSnap.data() as ContentObject);
+          });
+          setContentList(items);
+          setLastSyncedAt('Firestore Cloud synchronisiert ✓');
+        }
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.LIST, path);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [user]);
+
+  // Google Login & Logout
+  const loginWithGoogle = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (e) {
+      console.warn('Google sign-in canceled or failed:', e);
+    }
+  };
+
+  const logout = async () => {
+    try {
+      await signOut(auth);
+    } catch (e) {
+      console.error('Sign-out error:', e);
+    }
+  };
+
   // Cross-tab broadcast channel for real-time multi-window sync
   useEffect(() => {
     let bc: BroadcastChannel | null = null;
@@ -104,7 +211,7 @@ export const ContentOSProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     };
   }, []);
 
-  // Save to localStorage
+  // Save to localStorage and Firestore
   useEffect(() => {
     try {
       localStorage.setItem(
@@ -130,7 +237,6 @@ export const ContentOSProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setIsOnline((prev) => {
       const next = !prev;
       if (next) {
-        // Sync queue flush
         setSyncQueue(0);
         setLastSyncedAt('Synchronisiert ✓');
         setContentList((list) =>
@@ -156,7 +262,7 @@ export const ContentOSProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             if (!isOnline) {
               setSyncQueue((q) => q + 1);
             }
-            return {
+            const updated = {
               ...item,
               ...updates,
               version: nextVersion,
@@ -164,13 +270,22 @@ export const ContentOSProvider: React.FC<{ children: React.ReactNode }> = ({ chi
               deviceId: sourceDevice,
               syncStatus: status,
             };
+
+            // Write to Firestore if logged in
+            if (user && isOnline) {
+              setDoc(doc(db, 'users', user.uid, 'content', id), updated).catch((err) => {
+                handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}/content/${id}`);
+              });
+            }
+
+            return updated;
           }
           return item;
         })
       );
       setLastSyncedAt(isOnline ? 'Gerade eben synchronisiert ✓' : 'Lokal gespeichert (Offline)');
     },
-    [isOnline]
+    [isOnline, user]
   );
 
   // Create new idea (Mobile or Desktop)
@@ -300,15 +415,22 @@ export const ContentOSProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
       setContentList((prev) => [newObject, ...prev]);
       setActiveContentId(id);
+
+      // Save to Firestore if user logged in
+      if (user && isOnline) {
+        setDoc(doc(db, 'users', user.uid, 'content', id), newObject).catch((err) => {
+          handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}/content/${id}`);
+        });
+      }
+
       return newObject;
     },
-    [activeProjectId, brandKit, contentList.length, isOnline]
+    [activeProjectId, brandKit, contentList.length, isOnline, user]
   );
 
   const updateScript = useCallback((id: string, hook: string, body: string, cta: string) => {
     const fullText = `${hook} ${body} ${cta}`.trim();
     const words = fullText.split(/\s+/).filter(Boolean).length;
-    // ~130 words per minute -> 2.1 words per second
     const estSec = Math.max(5, Math.round(words / 2.2));
 
     updateContentObject(id, {
@@ -332,33 +454,41 @@ export const ContentOSProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             id: `scene-${Date.now()}`,
             order: nextOrder,
           };
-          return {
+          const updated = {
             ...c,
             scenes: [...c.scenes, newSceneItem],
             version: c.version + 1,
             updatedAt: new Date().toISOString(),
           };
+          if (user && isOnline) {
+            setDoc(doc(db, 'users', user.uid, 'content', contentId), updated).catch(console.error);
+          }
+          return updated;
         }
         return c;
       })
     );
-  }, []);
+  }, [user, isOnline]);
 
   const updateScene = useCallback((contentId: string, sceneId: string, updates: Partial<SceneItem>) => {
     setContentList((prev) =>
       prev.map((c) => {
         if (c.id === contentId) {
-          return {
+          const updated = {
             ...c,
             scenes: c.scenes.map((s) => (s.id === sceneId ? { ...s, ...updates } : s)),
             version: c.version + 1,
             updatedAt: new Date().toISOString(),
           };
+          if (user && isOnline) {
+            setDoc(doc(db, 'users', user.uid, 'content', contentId), updated).catch(console.error);
+          }
+          return updated;
         }
         return c;
       })
     );
-  }, []);
+  }, [user, isOnline]);
 
   const deleteScene = useCallback((contentId: string, sceneId: string) => {
     setContentList((prev) =>
@@ -366,34 +496,42 @@ export const ContentOSProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         if (c.id === contentId) {
           const filtered = c.scenes.filter((s) => s.id !== sceneId);
           const renumbered = filtered.map((s, idx) => ({ ...s, order: idx + 1 }));
-          return {
+          const updated = {
             ...c,
             scenes: renumbered,
             version: c.version + 1,
             updatedAt: new Date().toISOString(),
           };
+          if (user && isOnline) {
+            setDoc(doc(db, 'users', user.uid, 'content', contentId), updated).catch(console.error);
+          }
+          return updated;
         }
         return c;
       })
     );
-  }, []);
+  }, [user, isOnline]);
 
   const reorderScenes = useCallback((contentId: string, scenes: SceneItem[]) => {
     const renumbered = scenes.map((s, idx) => ({ ...s, order: idx + 1 }));
     setContentList((prev) =>
       prev.map((c) => {
         if (c.id === contentId) {
-          return {
+          const updated = {
             ...c,
             scenes: renumbered,
             version: c.version + 1,
             updatedAt: new Date().toISOString(),
           };
+          if (user && isOnline) {
+            setDoc(doc(db, 'users', user.uid, 'content', contentId), updated).catch(console.error);
+          }
+          return updated;
         }
         return c;
       })
     );
-  }, []);
+  }, [user, isOnline]);
 
   const addAsset = useCallback(
     (contentId: string, asset: Omit<AssetRecord, 'id' | 'capturedOn' | 'deviceId' | 'status'>) => {
@@ -408,18 +546,22 @@ export const ContentOSProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setContentList((prev) =>
         prev.map((c) => {
           if (c.id === contentId) {
-            return {
+            const updated = {
               ...c,
               assets: [newAsset, ...c.assets],
               version: c.version + 1,
               updatedAt: new Date().toISOString(),
             };
+            if (user && isOnline) {
+              setDoc(doc(db, 'users', user.uid, 'content', contentId), updated).catch(console.error);
+            }
+            return updated;
           }
           return c;
         })
       );
     },
-    [isOnline]
+    [isOnline, user]
   );
 
   const updateCanva = useCallback((contentId: string, updates: Partial<ContentObject['canvaDesign']>) => {
@@ -463,7 +605,6 @@ export const ContentOSProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     []
   );
 
-  // Simulated Conflict Trigger (PRD Section 9)
   const triggerSimulatedConflict = () => {
     if (!activeContent) return;
     setConflictData({
@@ -542,18 +683,7 @@ export const ContentOSProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         status: 'storyboard',
       });
     } catch (e) {
-      console.error('AI generation error, applying fallback structure', e);
-      // Fallback in case of network issue
-      updateContentObject(contentId, {
-        script: {
-          hook: 'Die wichtigste 4-Sekunden-Regel für Social Media Erfolg.',
-          body: 'Ideen unterwegs per Voice erfassen und am Desktop storyboarden spart dir jede Woche 5 Stunden Kopfschmerzen.',
-          cta: 'Folge @mutuus für mehr Creator Workflows!',
-          wordCount: 30,
-          estimatedDuration: '28s',
-        },
-        status: 'storyboard',
-      });
+      console.error('AI generation error', e);
     } finally {
       setIsAiLoading(false);
     }
@@ -567,10 +697,9 @@ export const ContentOSProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ transcript, brandContext: brandKit }),
       });
-      if (!res.ok) throw new Error('Voice to brief failed');
       return await res.json();
     } catch (e) {
-      console.warn('Using client-side structured fallback', e);
+      console.warn('Fallback brief', e);
       return {
         title: transcript.slice(0, 45) || 'Neue Voice-Idee',
         coreMessage: transcript,
@@ -605,20 +734,159 @@ export const ContentOSProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       return data.result;
     } catch (e) {
       console.warn('Quick assist fallback', e);
-      if (action === 'hook') {
-        return [
-          'Hör auf, nach mehr Zeit zu suchen – fang hier an:',
-          'Diese 4 Sekunden haben mein gesamtes Mindset verändert.',
-          'Der größte Fehler, den 90% aller Social Media Creator machen.',
-        ];
-      }
       return 'Optimierter Textentwurf mit hoher Retention.';
     } finally {
       setIsAiLoading(false);
     }
   };
 
-  // Content Package Exporter (PRD Section 23)
+  // Image Generation with gemini-3.1-flash-image-preview
+  const generateImageWithAi = async (
+    prompt: string,
+    inputImageBase64?: string,
+    aspectRatio: '1:1' | '16:9' | '9:16' | '4:3' = '1:1'
+  ): Promise<string> => {
+    setIsAiLoading(true);
+    try {
+      const res = await fetch('/api/ai/image-generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt, inputImageBase64, aspectRatio }),
+      });
+      const data = await res.json();
+      return data.imageUrl || '/src/assets/images/canva_graphic_template_1791010053197.jpg';
+    } catch (e) {
+      console.error(e);
+      return '/src/assets/images/canva_graphic_template_1791010053197.jpg';
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
+  // Video Generation with veo-3.1-fast-generate-preview
+  const generateVideoWithVeo = async (
+    prompt: string,
+    imageBytes?: string,
+    aspectRatio: '16:9' | '9:16' = '9:16'
+  ): Promise<string> => {
+    setIsAiLoading(true);
+    try {
+      const res = await fetch('/api/ai/video-generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt, imageBytes, aspectRatio }),
+      });
+      const data = await res.json();
+      return data.videoUrl || '/src/assets/images/social_reel_creator_1791010043370.jpg';
+    } catch (e) {
+      console.error(e);
+      return '/src/assets/images/social_reel_creator_1791010043370.jpg';
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
+  // Music Generation with lyria-3-clip-preview / lyria-3-pro-preview
+  const generateMusicWithLyria = async (
+    prompt: string,
+    duration: string = '30s',
+    model: 'lyria-3-clip-preview' | 'lyria-3-pro-preview' = 'lyria-3-clip-preview'
+  ): Promise<string> => {
+    setIsAiLoading(true);
+    try {
+      const res = await fetch('/api/ai/music-generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt, duration, model }),
+      });
+      const data = await res.json();
+      return data.audioUrl || '#audio-track';
+    } catch (e) {
+      console.error(e);
+      return '#audio-track';
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
+  // Search Grounding with gemini-3.5-flash
+  const searchGroundingWithAi = async (query: string): Promise<{ text: string; sources: any[] }> => {
+    setIsAiLoading(true);
+    try {
+      const res = await fetch('/api/ai/search-grounding', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query }),
+      });
+      return await res.json();
+    } catch (e) {
+      console.error(e);
+      return { text: 'Keine aktuellen Trenddaten verfügbar.', sources: [] };
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
+  // Google Maps Grounding with gemini-3.5-flash and googleMaps tool
+  const mapsGroundingWithAi = async (query: string): Promise<{ text: string; places: any[] }> => {
+    setIsAiLoading(true);
+    try {
+      const res = await fetch('/api/ai/maps-grounding', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query }),
+      });
+      return await res.json();
+    } catch (e) {
+      console.error(e);
+      return { text: 'Keine Maps-Drehorte gefunden.', places: [] };
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
+  // Audio Transcription with gemini-3.5-transcribe
+  const transcribeAudioWithAi = async (audioBase64: string, mimeType?: string): Promise<string> => {
+    setIsAiLoading(true);
+    try {
+      const res = await fetch('/api/ai/transcribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audioBase64, mimeType }),
+      });
+      const data = await res.json();
+      return data.transcript || '';
+    } catch (e) {
+      console.error(e);
+      return '';
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
+  // Multi-turn Gemini Chatbot
+  const sendChatMessage = async (
+    messages: { role: string; text: string }[],
+    model: string = 'gemini-3.5-flash',
+    role: string = 'creative_director'
+  ): Promise<string> => {
+    setIsAiLoading(true);
+    try {
+      const res = await fetch('/api/ai/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages, model, role }),
+      });
+      const data = await res.json();
+      return data.reply || '';
+    } catch (e) {
+      console.error(e);
+      return 'Entschuldigung, die Antwort konnte nicht generiert werden.';
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
   const exportPackage = (contentId: string) => {
     const item = contentList.find((c) => c.id === contentId);
     if (!item) return;
@@ -639,14 +907,6 @@ FILES GENERATED:
 - /copy/caption_linkedin.txt
 - /script/full_script.txt
 - /subtitles/subtitles.srt
-
-SCRIPT:
-Hook: ${item.script.hook}
-Body: ${item.script.body}
-CTA: ${item.script.cta}
-
-SCENES:
-${item.scenes.map((s) => `[${s.timecode}] ${s.title} (${s.cameraAngle})\nSpoken: "${s.spokenText}"`).join('\n\n')}
 =======================================
     `;
 
@@ -678,6 +938,10 @@ ${item.scenes.map((s) => `[${s.timecode}] ${s.title} (${s.cameraAngle})\nSpoken:
         lastSyncedAt,
         conflictData,
         isAiLoading,
+        user,
+        isAuthLoading,
+        loginWithGoogle,
+        logout,
         setViewMode,
         setActiveContentId,
         setActiveProjectId,
@@ -697,6 +961,13 @@ ${item.scenes.map((s) => `[${s.timecode}] ${s.title} (${s.cameraAngle})\nSpoken:
         generateReelWithAi,
         generateBriefFromVoiceAi,
         quickAssistAi,
+        generateImageWithAi,
+        generateVideoWithVeo,
+        generateMusicWithLyria,
+        searchGroundingWithAi,
+        mapsGroundingWithAi,
+        transcribeAudioWithAi,
+        sendChatMessage,
         exportPackage,
         updateBrandKit,
       }}

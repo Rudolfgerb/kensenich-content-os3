@@ -3,13 +3,14 @@ import { DesktopSidebar } from './DesktopSidebar';
 import { DesktopWorkspace } from './DesktopWorkspace';
 import { DesktopPipeline } from './DesktopPipeline';
 import { DesktopAssetLibrary } from './DesktopAssetLibrary';
+import { DesktopAiStudio } from './DesktopAiStudio';
 import { DesktopVideoEditor } from './DesktopVideoEditor';
 import { DesktopCanvaIntegration } from './DesktopCanvaIntegration';
 import { DesktopCalendar } from './DesktopCalendar';
 import { DesktopBrandKit } from './DesktopBrandKit';
 
 export const DesktopProductionStation: React.FC = () => {
-  const [currentView, setCurrentView] = useState<'workspace' | 'pipeline' | 'assets' | 'video' | 'canva' | 'calendar' | 'brand'>('workspace');
+  const [currentView, setCurrentView] = useState<'workspace' | 'pipeline' | 'assets' | 'aistudio' | 'video' | 'canva' | 'calendar' | 'brand'>('workspace');
 
   return (
     <div className="flex-1 flex h-full overflow-hidden bg-neutral-950">
@@ -19,6 +20,7 @@ export const DesktopProductionStation: React.FC = () => {
         {currentView === 'workspace' && <DesktopWorkspace onOpenAssetLibrary={() => setCurrentView('assets')} />}
         {currentView === 'pipeline' && <DesktopPipeline />}
         {currentView === 'assets' && <DesktopAssetLibrary onNavigateToWorkspace={() => setCurrentView('workspace')} />}
+        {currentView === 'aistudio' && <DesktopAiStudio />}
         {currentView === 'video' && <DesktopVideoEditor />}
         {currentView === 'canva' && <DesktopCanvaIntegration />}
         {currentView === 'calendar' && <DesktopCalendar />}

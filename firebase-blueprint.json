@@ -1,0 +1,85 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile information",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 256 },
+        "displayName": { "type": "string", "maxLength": 128 },
+        "photoURL": { "type": "string", "maxLength": 512 },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["userId", "email"]
+    },
+    "ContentItem": {
+      "title": "ContentItem",
+      "description": "Cross-platform social media content object",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "code": { "type": "string", "maxLength": 64 },
+        "projectId": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 256 },
+        "status": { "type": "string", "maxLength": 64 },
+        "source": { "type": "string", "maxLength": 64 },
+        "version": { "type": "number" },
+        "updatedAt": { "type": "string", "maxLength": 64 },
+        "deviceId": { "type": "string", "maxLength": 128 },
+        "syncStatus": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "userId", "code", "title", "status"]
+    },
+    "ProjectItem": {
+      "title": "ProjectItem",
+      "description": "Creator project workspace",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 128 },
+        "client": { "type": "string", "maxLength": 128 },
+        "color": { "type": "string", "maxLength": 32 },
+        "contentCount": { "type": "number" },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "userId", "name"]
+    },
+    "BrandKitItem": {
+      "title": "BrandKitItem",
+      "description": "Synchronized Brand Kit for content creation",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "brandName": { "type": "string", "maxLength": 128 },
+        "tagline": { "type": "string", "maxLength": 256 },
+        "videoStyle": { "type": "string", "maxLength": 256 },
+        "captionStyle": { "type": "string", "maxLength": 256 },
+        "intro": { "type": "string", "maxLength": 256 },
+        "outro": { "type": "string", "maxLength": 256 },
+        "defaultCTA": { "type": "string", "maxLength": 256 }
+      },
+      "required": ["userId", "brandName"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Stores user profile data"
+    },
+    "/users/{userId}/content/{contentId}": {
+      "schema": "ContentItem",
+      "description": "Stores user content objects"
+    },
+    "/users/{userId}/projects/{projectId}": {
+      "schema": "ProjectItem",
+      "description": "Stores user projects"
+    },
+    "/users/{userId}/brand/{brandId}": {
+      "schema": "BrandKitItem",
+      "description": "Stores user brand kit"
+    }
+  }
+}

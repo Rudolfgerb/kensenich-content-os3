@@ -20,8 +20,8 @@ import {
 import { useContentOS } from '../../context/ContentOSContext';
 
 interface DesktopSidebarProps {
-  currentView: 'workspace' | 'pipeline' | 'assets' | 'video' | 'canva' | 'calendar' | 'brand';
-  onSelectView: (view: 'workspace' | 'pipeline' | 'assets' | 'video' | 'canva' | 'calendar' | 'brand') => void;
+  currentView: 'workspace' | 'pipeline' | 'assets' | 'aistudio' | 'video' | 'canva' | 'calendar' | 'brand';
+  onSelectView: (view: 'workspace' | 'pipeline' | 'assets' | 'aistudio' | 'video' | 'canva' | 'calendar' | 'brand') => void;
 }
 
 export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({ currentView, onSelectView }) => {
@@ -95,6 +95,18 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({ currentView, onS
         >
           <FolderArchive className="w-4 h-4 text-amber-400" />
           <span>Asset Library</span>
+        </button>
+
+        <button
+          onClick={() => onSelectView('aistudio')}
+          className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+            currentView === 'aistudio'
+              ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+              : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/60'
+          }`}
+        >
+          <Sparkles className="w-4 h-4 text-amber-400" />
+          <span>AI Studio Lab</span>
         </button>
 
         <button
